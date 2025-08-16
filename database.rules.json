@@ -1,0 +1,83 @@
+{
+  "rules": {
+    // By default, deny all reads and writes
+    ".read": false,
+    ".write": false,
+
+    // `/ids` mapping from numericId to uid for friend lookups.
+    "ids": {
+      // Any authenticated user can check if a numeric ID exists.
+      ".read": "auth != null",
+      "$numericId": {
+        // A user can only write a new ID mapping during their own profile creation.
+        // It must not exist before, and the value must be their own UID.
+        ".write": "auth != null && !data.exists() && newData.val() === auth.uid",
+        ".validate": "newData.isString() && newData.val().length > 0"
+      }
+    },
+
+    // User profile data.
+    "users": {
+      "$uid": {
+        // SECURITY CAVEAT: To allow client-side 'add friend' logic to function without
+        // a Cloud Function, we allow any authenticated user to read a user's profile.
+        // In a production app, this is a potential data leak as it exposes the keys
+        // under 'friends' and 'conversations'. The recommended solution is to make this
+        // readable only by the owner (`auth.uid === $uid`) and move the 'add friend'
+        // logic to a Cloud Function with admin privileges.
+        ".read": "auth != null",
+        // A user can only write to their own profile.
+        ".write": "auth.uid === $uid",
+
+        // Validation rules for the user profile structure.
+        ".validate": "newData.hasChildren(['uid', 'displayName', 'photoURL', 'createdAt', 'numericId'])",
+        "uid": { ".validate": "newData.val() === $uid" },
+        "displayName": { ".validate": "newData.isString()" },
+        "photoURL": { ".validate": "newData.isString()" },
+        // numericId and createdAt can only be written once, when the profile is created.
+        "numericId": { ".validate": "!data.exists() && newData.isString()" },
+        "createdAt": { ".validate": "!data.exists() && newData.isNumber()" },
+
+        "friends": {
+          "$friendUid": { ".validate": "newData.isBoolean()" }
+        },
+        "conversations": {
+          "$roomId": {
+            ".validate": "newData.hasChildren(['roomId', 'lastTime', 'with']) && newData.child('with').hasChildren(['uid', 'displayName', 'photoURL'])"
+          }
+        },
+        // Disallow any other properties from being added to the user profile.
+        "$other": { ".validate": false }
+      }
+    },
+
+    // Chat rooms and messages.
+    "rooms": {
+      "$roomId": {
+        // A user can only read or write to a room if their UID is part of the room's key.
+        ".read": "auth != null && $roomId.contains(auth.uid)",
+        ".write": "auth != null && $roomId.contains(auth.uid)",
+
+        "messages": {
+          "$messageId": {
+            // Validate the structure of each message.
+            ".validate": "newData.hasChildren(['fromUid', 'text', 'timestamp'])",
+            // A user can only send messages as themselves.
+            "fromUid": { ".validate": "newData.val() === auth.uid" },
+            "text": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length < 1024" },
+            // The server timestamp is a trusted value.
+            "timestamp": { ".validate": "newData.hasChild('.sv')" },
+            // Disallow any other properties on a message.
+            "$other": { ".validate": false }
+          }
+        }
+      }
+    },
+
+    // Counters are internal and should not be accessible by clients.
+    "counters": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}
